@@ -1,0 +1,182 @@
+<html>
+<head>
+</head>
+
+<body>
+<input id="queryData" type="button" value="Query" onclick="queryAll();" />
+
+<form id="myForm">
+	From: <input type="text" id="dateFrom" value=""><br>
+	To: <input type="text" id="dateTo" value="2018-12-25"><br>
+	<select id="selectFlight">
+		<option>Loading...</option>
+	</select>
+</form>
+It may take some time to load the data...
+
+<br>
+Actual prices:<br>
+<div id="lastPrice" style="height: 300px; width: 100%;"></div>
+<br>
+History day by day:<br>
+<div id="detailedPrices"></div>
+
+<script src="https://sdk.amazonaws.com/js/aws-sdk-2.7.16.min.js"></script>
+<script src="https://canvasjs.com/assets/script/jquery-1.11.1.min.js"></script>
+<script src="https://canvasjs.com/assets/script/canvasjs.min.js"></script>
+<script>
+document.getElementById("dateFrom").value = (new Date()).toISOString().substring(0, 10);
+
+AWS.config.region = 'eu-west-1'; // Region
+AWS.config.credentials = new AWS.CognitoIdentityCredentials({
+    IdentityPoolId: 'XXXX',
+});
+
+ddb = new AWS.DynamoDB({apiVersion: '2012-10-08'});
+
+// Call DynamoDB to retrieve the list of tables
+ddb.listTables({Limit: 10}, function(err, data) {
+	if (err) {
+		console.log("Error", err.code);
+	} else {
+		console.log("Table names are ", data.TableNames);
+		if(data.TableNames.length > 0) {
+			var select = document.getElementById("selectFlight");
+			select[0] = null;
+			for(var i in data.TableNames) {
+				var opt = data.TableNames[i];
+				var el = document.createElement("option");
+				el.textContent = opt;
+				el.value = opt;
+				select.appendChild(el);
+			}
+		}
+	}
+});
+
+var docClient = new AWS.DynamoDB.DocumentClient();
+
+var lastPriceList = []
+var chartLastPrice = new CanvasJS.Chart("lastPrice", {
+	animationEnabled: true,
+	theme: "light2",
+	title: {
+		text: ""
+	},
+	axisY: {
+		title: "Currency",
+		titleFontSize: 12
+	},
+	axisX: {
+		valueFormatString: "YYYY-MM-DD DDD",
+		labelAngle: -20
+	},
+	data: [{
+		type: "column",
+		yValueFormatString: "####",
+		xValueFormatString: "YYYY-MM-DD DDD",
+		dataPoints: lastPriceList
+	}]
+});
+
+function queryAll() {
+	// clean up
+	var n = document.getElementById("detailedPrices");
+	while (n.firstChild) {
+		n.removeChild(n.firstChild);
+	}
+	lastPriceList.length = 0;
+	chartLastPrice.render();
+
+	var date = new Date(document.getElementById("dateFrom").value);
+	var end = new Date(document.getElementById("dateTo").value);
+	while (date < end) {
+		queryData(date.toISOString().substring(0, 10));
+		date.setDate(date.getDate() + 1);
+	}
+}
+
+function queryData(target_date) {
+	var select = document.getElementById("selectFlight");
+    var params = {
+        TableName : select.options[select.selectedIndex].value,
+        ProjectionExpression:"#dt, query_date, price, currency",
+        KeyConditionExpression: "#dt = :qd",
+        ExpressionAttributeNames:{
+            "#dt": "date"
+        },
+        ExpressionAttributeValues: {
+            ":qd": target_date
+        }
+    };
+
+    docClient.query(params, function(err, data) {
+        if (err) {
+            console.log(err);
+        } else {
+			var div = document.createElement('div');
+			div.id = target_date;
+			var parentDiv = document.getElementById("detailedPrices");
+			parentDiv.appendChild(div);
+			
+			if(data.Count > 0) {
+				div.style = "height: 200px; width: 100%;"
+				var currency = "";
+				var dataPoints = [];
+				var items = data.Items;
+				for(var i in items) {
+					dataPoints.push({
+						x: new Date(items[i].query_date * 1000),
+						y: items[i].price
+					});
+					currency = items[i].currency;
+				}
+				
+				if (dataPoints.length > 0) {
+					lastPriceList.push({
+						x: new Date(target_date),
+						y: dataPoints[dataPoints.length-1].y
+					});
+					chartLastPrice.render();
+				}
+				
+				var chart = new CanvasJS.Chart(target_date, {
+					animationEnabled: true,
+					theme: "light2",
+					title: {
+						text: ""
+					},
+					legend:{
+						cursor: "pointer",
+						fontSize: 16
+					},
+					toolTip:{
+						shared: true
+					},
+					axisY: {
+						title: "Currency: " + currency,
+						titleFontSize: 12
+					},
+					axisX: {
+						valueFormatString: "YYYY-MM-DD HH:mm",
+						labelAngle: -20
+					},
+					data: [{
+						type: "line",
+						name: target_date,
+						showInLegend: true,
+						yValueFormatString: "####",
+						xValueFormatString: "YYYY-MM-DD HH:mm (DDD)",
+						dataPoints: dataPoints
+					}]
+				});
+				chart.render();
+			} else {
+				div.innerHTML = "No flight on " + target_date;
+			}
+        }
+    });
+}
+</script>
+</body>
+</html> 
